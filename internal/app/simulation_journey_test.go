@@ -749,21 +749,75 @@ func TestSimulation_HintsSearchJourney(t *testing.T) {
 					return len(sim.overlay.lastHintLabels()) == 1
 				})
 
+				// Return selects the one match itself, within the keystroke.
 				sim.press("Return")
 
-				labels := sim.overlay.lastHintLabels()
-				if len(labels) != 1 {
-					t.Fatalf("expected one hint after confirmed search, got %v", labels)
-				}
-
-				sim.typeLabel(labels[0])
-
 				target := elements[query.target].Center()
-				sim.waitFor("cursor on the searched element", func() bool {
-					return sim.cursor.position() == target
-				})
+				if got := sim.cursor.position(); got != target {
+					t.Fatalf(
+						"cursor after Return = %v, want the searched element at %v",
+						got,
+						target,
+					)
+				}
 			})
 		}
+	}
+}
+
+// TestSimulation_HintSearchFieldConfirmSelectsTheMatch covers Return in a
+// platform search field, which confirms through its callback rather than the
+// key stream. With --action, --repeat and --search, the selection clicks and
+// reopens hints with a new field from inside the old field's callback. The
+// click has to have happened by the time that callback returns.
+func TestSimulation_HintSearchFieldConfirmSelectsTheMatch(t *testing.T) {
+	const searchClickHotkey = "Primary+Shift+S"
+
+	cfg := simConfig()
+	cfg.Hotkeys.Bindings[searchClickHotkey] = []string{
+		"hints --action left_click --repeat --search",
+	}
+
+	elements := threeButtons(t)
+	sim := newSimHarness(t, cfg, elements)
+	sim.textInput.Started = true
+
+	sim.pressHotkey(searchClickHotkey)
+	sim.waitMode(domain.ModeHints)
+	sim.waitFor("search field opened", func() bool { return sim.textInput.StartCount() == 1 })
+
+	callbacks := sim.textInput.Callbacks()
+	callbacks.OnQueryChanged("cancel")
+	sim.waitFor("hints narrowed to the query", func() bool {
+		return len(sim.overlay.lastHintLabels()) == 1
+	})
+
+	confirmed := make(chan struct{})
+
+	go func() {
+		callbacks.OnConfirm()
+		close(confirmed)
+	}()
+
+	select {
+	case <-confirmed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("confirming the search field did not return")
+	}
+
+	target := elements[1].Center()
+
+	clicks := sim.ax.recordedClicks()
+	if len(clicks) != 1 || clicks[0].point != target {
+		t.Fatalf(
+			"clicks after confirming = %+v, want one at the searched element %v",
+			clicks,
+			target,
+		)
+	}
+
+	if got := sim.textInput.StartCount(); got != 2 {
+		t.Errorf("search fields opened = %d, want 2, since the repeat reopens one", got)
 	}
 }
 
