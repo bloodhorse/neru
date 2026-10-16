@@ -14,6 +14,7 @@ import "C"
 
 import (
 	"image"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -363,7 +364,8 @@ func (o *Overlay) getOrCacheLabel(label string) *C.char {
 		return cStr
 	}
 
-	cStr := C.CString(label)
+	// horse: labels are drawn lowercase; matching stays uppercase inside.
+	cStr := C.CString(strings.ToLower(label))
 	o.cachedLabels[label] = cStr
 
 	return cStr
