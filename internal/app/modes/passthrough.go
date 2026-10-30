@@ -3,20 +3,12 @@ package modes
 import (
 	"slices"
 	"strings"
-	"time"
 
 	"go.uber.org/zap"
 
 	configpkg "github.com/y3owk1n/neru/internal/config"
 	"github.com/y3owk1n/neru/internal/domain"
-	"github.com/y3owk1n/neru/internal/domain/modecmd"
 )
-
-// passthroughHintRefreshDelay is the delay before refreshing hints after a
-// modifier shortcut is passed through to macOS. This gives the OS time to
-// process the shortcut (e.g., Cmd+Tab app switch) before Neru re-collects
-// AX elements.
-const passthroughHintRefreshDelay = 300 * time.Millisecond
 
 // syncModifierPassthrough tells the event tap which keys the active mode
 // answers to, so it consumes those and passes the rest through.
@@ -70,10 +62,12 @@ func (h *handlerState) syncModifierPassthrough(mode domain.Mode) {
 // hold back.
 //
 // Caller must hold h.mu.
+//
+// horse: on in every open mode whatever general.passthrough_unbounded_keys
+// says; an unbound Cmd/Alt/Ctrl chord or F-key reaches the app and closes the
+// mode (passthroughTick).
 func (h *handlerState) passthroughEnabledFor(mode domain.Mode) bool {
-	return h.config != nil &&
-		mode != domain.ModeIdle &&
-		h.config.General.PassthroughUnboundedKeys
+	return h.config != nil && mode != domain.ModeIdle
 }
 
 // RefreshPassthroughForFocusedAppChange re-synchronizes the event tap with the
@@ -191,13 +185,13 @@ func (h *Handler) handlePassthrough(mode domain.Mode, session uint64) {
 	h.passthroughTick(mode, session)
 }
 
-// passthroughTick is called when a modifier shortcut was passed through
-// to macOS while a mode was active. The mode/session arguments identify the
-// originating activation so stale callbacks can be ignored safely. Only hints
-// mode needs a refresh because its labels point at AX elements that may have
-// moved (e.g., Cmd+Tab switched the focused app). Grid, recursive-grid, and
-// scroll modes use screen coordinates that remain valid regardless of what the
-// OS does with the shortcut.
+// passthroughTick is called when a key was passed through to the OS while a
+// mode was active. The mode/session arguments identify the originating
+// activation so stale callbacks can be ignored safely.
+//
+// horse: a pass always closes the mode, whatever
+// general.should_exit_after_passthrough says; the hints refresh it replaced
+// had nothing left to refresh.
 //
 // Caller must hold h.mu.
 func (h *handlerState) passthroughTick(mode domain.Mode, session uint64) {
@@ -207,68 +201,8 @@ func (h *handlerState) passthroughTick(mode domain.Mode, session uint64) {
 
 	h.cancelPendingModifierToggle()
 
-	if h.config != nil && h.config.General.ShouldExitAfterPassthrough {
-		h.logger.Debug("Exiting mode after passthrough",
-			zap.String("mode", domain.ModeString(mode)),
-			zap.Uint64("session", session))
-		h.exitMode()
-
-		return
-	}
-
-	if mode != domain.ModeHints {
-		return
-	}
-
-	h.logger.Debug("Scheduling hint refresh after modifier passthrough")
-
-	// Cancel any existing refresh timer to debounce rapid passthroughs.
-	if h.refreshHintsTimer != nil {
-		h.refreshHintsTimer.Stop()
-	}
-
-	var timer *time.Timer
-
-	timerSession := h.modeSession
-
-	timer = time.AfterFunc(passthroughHintRefreshDelay, func() {
-		h.outer.mu.Lock()
-		defer h.outer.mu.Unlock()
-
-		// Guard against stale timer: if the user exited hints mode while we
-		// were waiting, or if hints was re-entered (new session), do not
-		// re-activate.
-		if h.modeSession != timerSession || h.appState.CurrentMode() != domain.ModeHints {
-			return
-		}
-
-		// Clear our own timer reference only if we are still the active one.
-		if h.refreshHintsTimer == timer {
-			h.refreshHintsTimer = nil
-		}
-
-		h.logger.Debug("Refreshing hints after modifier passthrough",
-			zap.Duration("delay", passthroughHintRefreshDelay))
-		filterRoles := h.hints.Context.FilterRoles()
-		filterTextContains := h.hints.Context.FilterTextContains()
-		startWithSearch := h.hints.Context.StartWithSearch()
-		strategyOverride := h.hints.Context.StrategyOverride()
-		captureScopeOverride := h.hints.Context.CaptureScopeOverride()
-		labelDirectionOverride := h.hints.Context.LabelDirectionOverride()
-		splitWord := h.hints.Context.SplitWord()
-		targets := h.hints.Context.Targets()
-		h.activateHintModeInternal(modecmd.Activation{
-			Mode:               domain.ModeHints,
-			FilterRoles:        filterRoles,
-			FilterTextContains: filterTextContains,
-			Search:             &startWithSearch,
-			Strategy:           &strategyOverride,
-			CaptureScope:       &captureScopeOverride,
-			LabelDirection:     &labelDirectionOverride,
-			SplitWord:          &splitWord,
-			Targets:            targets,
-			// OnExit is left nil to preserve the stored steps across refresh.
-		})
-	})
-	h.refreshHintsTimer = timer
+	h.logger.Debug("Exiting mode after passthrough",
+		zap.String("mode", domain.ModeString(mode)),
+		zap.Uint64("session", session))
+	h.exitMode()
 }

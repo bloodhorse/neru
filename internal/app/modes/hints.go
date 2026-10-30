@@ -247,12 +247,10 @@ func (h *handlerState) activateHintModeInternal(activation modecmd.Activation) {
 
 	domainHints = filteredHints
 
+	// horse: zero hints still enters the mode, so mode hooks fire and Escape
+	// or --toggle leaves it.
 	if len(domainHints) == 0 {
 		h.logger.Warn("No hints generated for action", zap.String("action", actionString))
-
-		h.abandonHintActivation(isRefresh)
-
-		return
 	}
 
 	// Create domain hint collection from generated hints

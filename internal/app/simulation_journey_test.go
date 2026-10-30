@@ -23,6 +23,7 @@ import (
 	"github.com/y3owk1n/neru/internal/domain"
 	"github.com/y3owk1n/neru/internal/domain/action"
 	"github.com/y3owk1n/neru/internal/domain/element"
+	"github.com/y3owk1n/neru/internal/domain/event"
 	"github.com/y3owk1n/neru/internal/ports"
 )
 
@@ -587,21 +588,41 @@ func TestSimulation_ModeSwitch(t *testing.T) {
 	sim.waitMode(domain.ModeIdle)
 }
 
-// TestSimulation_HintsWithoutElements covers the failure path a real user
-// hits on an empty screen: activation is abandoned, the app stays idle and
-// keeps working (grid still activates afterwards).
+// TestSimulation_HintsWithoutElements covers an empty screen: hints mode still
+// opens with no labels, so its enter and exit are announced, Escape leaves it,
+// and the app keeps working afterwards.
 func TestSimulation_HintsWithoutElements(t *testing.T) {
 	sim := newSimHarness(t, simConfig(), nil)
+	events := subscribeEvents(t, sim)
 
 	sim.pressHotkey(hintsHotkey)
-	sim.neverMode(domain.ModeHints, 250*time.Millisecond)
+	sim.waitMode(domain.ModeHints)
+	sim.waitFor("the empty hints overlay up", sim.overlay.isVisible)
 
-	if sim.app.CurrentMode() != domain.ModeIdle {
-		t.Fatalf("expected idle after abandoned activation, got %v", sim.app.CurrentMode())
-	}
+	sim.press("a")
+	sim.press("Escape")
+	sim.waitMode(domain.ModeIdle)
+
+	events.expect(modeEnter("hints"), modeExit("hints", event.ExitCancelled))
 
 	sim.pressHotkey(gridHotkey)
 	sim.waitMode(domain.ModeGrid)
+}
+
+// TestSimulation_EmptyHintsToggleBackToIdle pins that the --toggle chord that
+// opened hints on an empty screen closes it again.
+func TestSimulation_EmptyHintsToggleBackToIdle(t *testing.T) {
+	cfg := simConfig()
+	cfg.Hotkeys.Bindings[globalToggleChord] = []string{"hints --toggle"}
+
+	sim := newSimHarness(t, cfg, nil)
+
+	sim.pressHotkey(globalToggleChord)
+	sim.waitMode(domain.ModeHints)
+	sim.waitFor("the mode taking keystrokes", sim.tap.IsEnabled)
+
+	sim.pressHotkey(globalToggleChord)
+	sim.waitMode(domain.ModeIdle)
 }
 
 // TestSimulation_ExcludedApp covers the exclusion list: when the focused app
@@ -1457,12 +1478,13 @@ func TestSimulation_DisabledModeBindingSkipped(t *testing.T) {
 	}
 }
 
-// TestSimulation_PassthroughExitsMode covers exit_after_passthrough: when a
-// modifier shortcut passes through to the OS, the active mode exits.
+// TestSimulation_PassthroughExitsMode covers the fork's passthrough rule: when
+// an unbound chord passes through to the OS, the active mode exits, with both
+// upstream switches written off.
 func TestSimulation_PassthroughExitsMode(t *testing.T) {
 	cfg := simConfig()
-	cfg.General.PassthroughUnboundedKeys = true
-	cfg.General.ShouldExitAfterPassthrough = true
+	cfg.General.PassthroughUnboundedKeys = false
+	cfg.General.ShouldExitAfterPassthrough = false
 
 	sim := newSimHarness(t, cfg, nil)
 
@@ -2201,12 +2223,13 @@ func TestSimulation_KeyPressedDuringAModeSwitchLandsInTheNewMode(t *testing.T) {
 // the journey above, and the reason keeping the capture is safe: the transition
 // hands the keyboard to a mode that may never arrive.
 //
-// Here it does not — hints is asked for on a screen with nothing clickable, so
-// the activation gives up after the exit that kept the capture. The app is left
+// Here it does not — hints is asked for while the element walk fails, so the
+// activation gives up after the exit that kept the capture. The app is left
 // idle, and idle holding the keyboard would be worse than the bug being fixed:
 // every key the user pressed would go nowhere at all.
 func TestSimulation_AbandonedModeSwitchGivesTheKeyboardBack(t *testing.T) {
 	sim := newSimHarness(t, simConfig(), nil)
+	sim.ax.failWalk(errSimWalkFailed)
 
 	sim.pressHotkey(gridHotkey)
 	sim.waitMode(domain.ModeGrid)

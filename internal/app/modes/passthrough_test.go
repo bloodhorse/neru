@@ -52,6 +52,44 @@ func TestModeModifierKeys_ScrollIncludesOnlyModifierHotkeys(t *testing.T) {
 	}
 }
 
+// TestPassthroughEnabledFor_IgnoresTheUpstreamSwitch pins the fork's rule:
+// every open mode passes unbound chords through, whatever
+// general.passthrough_unbounded_keys says, and idle passes nothing.
+func TestPassthroughEnabledFor_IgnoresTheUpstreamSwitch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		mode    domain.Mode
+		written bool
+		want    bool
+	}{
+		{name: "hints with the switch off", mode: domain.ModeHints, want: true},
+		{name: "grid with the switch off", mode: domain.ModeGrid, want: true},
+		{name: "scroll with the switch on", mode: domain.ModeScroll, written: true, want: true},
+		{name: "no mode open", mode: domain.ModeIdle, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := config.DefaultConfig()
+			cfg.General.PassthroughUnboundedKeys = test.written
+
+			handler := newHandlerWithState(handlerState{
+				config:   cfg,
+				logger:   zap.NewNop(),
+				appState: state.NewAppState(),
+			})
+
+			if got := handler.passthroughEnabledFor(test.mode); got != test.want {
+				t.Errorf("passthroughEnabledFor(%v) = %v, want %v", test.mode, got, test.want)
+			}
+		})
+	}
+}
+
 func TestHandlePassthroughLocked_IgnoresStaleSession(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.General.PassthroughUnboundedKeys = true
@@ -101,29 +139,6 @@ func TestPassthroughCallbackFor_CapturesModeSession(t *testing.T) {
 	if handler.refreshHintsTimer != nil {
 		t.Fatal("expected captured passthrough callback to ignore a later mode session")
 	}
-}
-
-func TestHandlePassthroughLocked_SchedulesHintRefreshForMatchingSession(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.General.PassthroughUnboundedKeys = true
-
-	appState := state.NewAppState()
-	appState.SetMode(domain.ModeHints)
-
-	handler := newHandlerWithState(handlerState{
-		config:      cfg,
-		logger:      zap.NewNop(),
-		appState:    appState,
-		modeSession: 3,
-	})
-
-	handler.passthroughTick(domain.ModeHints, 3)
-
-	if handler.refreshHintsTimer == nil {
-		t.Fatal("expected matching passthrough callback to schedule a hint refresh")
-	}
-
-	handler.refreshHintsTimer.Stop()
 }
 
 // The bug in #1252 and the tests that pin it.
@@ -321,13 +336,6 @@ func TestRefreshPassthroughForFocusedAppChange_LeavesTheTapAlone(t *testing.T) {
 		return cfg
 	}
 
-	withPassthroughOff := func() *config.Config {
-		cfg := perAppPassthroughConfig()
-		cfg.General.PassthroughUnboundedKeys = false
-
-		return cfg
-	}
-
 	tests := []struct {
 		name   string
 		config func() *config.Config
@@ -342,11 +350,6 @@ func TestRefreshPassthroughForFocusedAppChange_LeavesTheTapAlone(t *testing.T) {
 		{
 			name:   "the active mode declares no per-app overrides",
 			config: withoutOverrides,
-			enter:  (*Handler).SetModeGrid,
-		},
-		{
-			name:   "passthrough is switched off",
-			config: withPassthroughOff,
 			enter:  (*Handler).SetModeGrid,
 		},
 	}

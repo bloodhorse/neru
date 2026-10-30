@@ -810,6 +810,10 @@ type simAXPort struct {
 	// it is stating what a keystroke costs rather than describing it.
 	focusedApp        string
 	focusedAppQueries int
+
+	// walkErr fails the element walk, the one way left for a hints activation
+	// to give up once an empty screen enters the mode.
+	walkErr error
 }
 
 var _ ports.AccessibilityPort = (*simAXPort)(nil)
@@ -822,6 +826,10 @@ func (a *simAXPort) ClickableElements(
 ) ([]*element.Element, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	if a.walkErr != nil {
+		return nil, a.walkErr
+	}
 
 	out := make([]*element.Element, len(a.elements))
 	copy(out, a.elements)
@@ -908,6 +916,18 @@ func (a *simAXPort) setElements(elements []*element.Element) {
 	defer a.mu.Unlock()
 
 	a.elements = elements
+}
+
+// errSimWalkFailed is the element walk failing, which still abandons a hints
+// activation now that an empty screen does not.
+var errSimWalkFailed = errors.New("element walk failed")
+
+// failWalk makes every element walk fail with err.
+func (a *simAXPort) failWalk(err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.walkErr = err
 }
 
 // setFocusedApp changes which application the fixture desktop reports as

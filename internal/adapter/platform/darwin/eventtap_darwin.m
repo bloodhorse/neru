@@ -10,6 +10,7 @@
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <os/lock.h>
+#import <stdatomic.h>
 
 #pragma mark - Type Definitions
 
@@ -47,6 +48,39 @@ static EventTapContext *gEventTapContext = nil;
 
 static const CGEventFlags kStickyModifierMask =
     kCGEventFlagMaskCommand | kCGEventFlagMaskShift | kCGEventFlagMaskAlternate | kCGEventFlagMaskControl;
+
+// horse: modifiers Neru itself holds down as sticky (NeruPostEventTapModifierEvent).
+// They ride every later key event, so the passthrough gate must not count them.
+static _Atomic uint64_t gStickyPostedFlags = 0;
+
+// horse: F1-F20 pass through like a modifier chord.
+static BOOL isFunctionKey(CGKeyCode keyCode) {
+	switch (keyCode) {
+	case kKeyCodeF1:
+	case kKeyCodeF2:
+	case kKeyCodeF3:
+	case kKeyCodeF4:
+	case kKeyCodeF5:
+	case kKeyCodeF6:
+	case kKeyCodeF7:
+	case kKeyCodeF8:
+	case kKeyCodeF9:
+	case kKeyCodeF10:
+	case kKeyCodeF11:
+	case kKeyCodeF12:
+	case kKeyCodeF13:
+	case kKeyCodeF14:
+	case kKeyCodeF15:
+	case kKeyCodeF16:
+	case kKeyCodeF17:
+	case kKeyCodeF18:
+	case kKeyCodeF19:
+	case kKeyCodeF20:
+		return YES;
+	default:
+		return NO;
+	}
+}
 
 static inline NSUInteger hotkeyLookupKey(CGKeyCode keyCode, CGEventFlags flags) {
 	uint8_t modifiers = 0;
@@ -488,13 +522,19 @@ CGEventRef eventTapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef 
 			BOOL hasAlt = (flags & kCGEventFlagMaskAlternate) != 0;
 			BOOL hasCtrl = (flags & kCGEventFlagMaskControl) != 0;
 
-			if (hasCmd || hasAlt || hasCtrl) {
-				if (stickyRelevantFlags != 0) {
-					os_unfair_lock_lock(&context->stickyModifierLock);
-					context->modifierChordFlags |= stickyRelevantFlags;
-					os_unfair_lock_unlock(&context->stickyModifierLock);
-				}
+			if ((hasCmd || hasAlt || hasCtrl) && stickyRelevantFlags != 0) {
+				os_unfair_lock_lock(&context->stickyModifierLock);
+				context->modifierChordFlags |= stickyRelevantFlags;
+				os_unfair_lock_unlock(&context->stickyModifierLock);
+			}
 
+			// horse: the pass gate counts only modifiers the user is holding, not
+			// Neru's own sticky ones, and lets F1-F20 through as well.
+			CGEventFlags passModifierFlags =
+			    flags & (kCGEventFlagMaskCommand | kCGEventFlagMaskAlternate | kCGEventFlagMaskControl) &
+			    ~(CGEventFlags)atomic_load(&gStickyPostedFlags);
+
+			if (passModifierFlags != 0 || isFunctionKey(keyCode)) {
 				// Snapshot modifier passthrough config under lock
 				BOOL passthroughEnabled = NO;
 				NSDictionary *blacklistLookup = nil;
@@ -522,7 +562,9 @@ CGEventRef eventTapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef 
 					}
 					return event;
 				}
+			}
 
+			if (hasCmd || hasAlt || hasCtrl) {
 				// Build the full key string (e.g. "Cmd+Shift+K") and dispatch to callback
 				NSString *keyName = NeruKeyCodeToName(keyCode);
 				if (!keyName) {
@@ -1140,6 +1182,13 @@ void NeruPostEventTapModifierEvent(const char *modifier, int isDown) {
 		CGEventSetFlags(event, flags);
 		// Stamp the event with a distinct value so our event tap can ignore it
 		CGEventSetIntegerValueField(event, kCGEventSourceUserData, 0x1337);
+
+		// horse: remember what Neru holds so the passthrough gate can ignore it.
+		if (isDown) {
+			atomic_fetch_or(&gStickyPostedFlags, (uint64_t)modMask);
+		} else {
+			atomic_fetch_and(&gStickyPostedFlags, ~(uint64_t)modMask);
+		}
 
 		// Go threads have no autorelease pool, and posting autoreleases a CFData.
 		@autoreleasepool {
