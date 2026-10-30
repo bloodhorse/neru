@@ -23,6 +23,17 @@ recipe steps by hand (`go test ./internal/...`, `go build ./...`), and pin lint 
   `com.apple.UserNotificationCenter` and `com.apple.coreservices.uiagent`. A prompt that still
   shows no labels means one more bundle ID for that list: get it with `lsappinfo info -only
   bundleid <process>`.
+- **The overlay sits above system alerts.** A system-modal alert (the "quit unexpectedly" crash
+  dialog from `com.apple.UserNotificationCenter`) is stacked by the window server above every
+  window level, `kCGMaximumWindowLevel` included: the grid drew under it and its hint labels were
+  collected but buried. Window levels, collection behaviour, `SLSSetWindowLevel`, tags and
+  `SLSOrderWindow` all lose. What wins is moving the overlay window into its own SkyLight space
+  with absolute level 400 (`NeruLiftWindowAboveSystemAlerts` in `overlay_darwin.m`; 300 and up
+  wins, 200 and below loses; recipe from Lakr233/SkyLightWindow). The window must be *removed*
+  from its old space (`SLSSpaceAddWindowsAndRemoveFromSpaces`, mode 7), adding alone does
+  nothing. A lifted window reads as off the active Space to AppKit, so the pinned-window probes
+  skip it (`lifted`), or they'd replace the window and drop it out of the space; hiding or a
+  replaced window clears `lifted` and the next order lifts it again.
 - **Hints opens on an empty screen.** Zero hints still enters the mode, so the hooks fire, the
   glow shows, and escape or the toggle closes it.
 - **Pass-through is always on.** In every mode, a key with cmd, alt or ctrl, or any F1–F20, that

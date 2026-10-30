@@ -11,6 +11,7 @@
 #import <CoreText/CoreText.h>
 #import <QuartzCore/QuartzCore.h>
 #import <stdatomic.h>
+#import <dlfcn.h>
 
 #pragma mark - HintItem Class
 
@@ -2212,6 +2213,7 @@ static NeruTextLayout *NeruLayoutFromGlyphStarts(NSString *text, const CGFloat *
 @property(nonatomic, assign) CFTimeInterval lastOnscreenVerifyTime;
 @property(nonatomic, assign) int onscreenProbeFailureStreak;
 @property(nonatomic, assign) uint64_t freshOrderGeneration;
+@property(nonatomic, assign) BOOL lifted;  ///< horse: in the SkyLight space above system alerts
 - (void)applyOverlayCollectionBehavior;
 - (void)reattachToAllSpacesIfVisible;
 - (void)verifyOnscreenAfterFreshOrder;
@@ -2235,6 +2237,53 @@ static const int kNeruOnscreenProbeFailureLimit = 3;
 static const int64_t kNeruFreshOrderVerifyDelayNs = 80 * NSEC_PER_MSEC;
 
 static BOOL NeruWindowIsOnscreenPerWindowServer(NSInteger windowNumber);
+
+// horse: a system-modal alert (a crash report, some TCC prompts) is stacked by
+// the window server above every window level, kCGMaximumWindowLevel included,
+// so labels drawn on its buttons were hidden under it. What beats it is a
+// window moved into its own SkyLight space with an absolute level of 300 or
+// more, the screen-lock band (Lakr233/SkyLightWindow uses 400). Private API,
+// resolved at runtime: a missing symbol leaves the overlay where it was. A
+// lifted window is off the active Space as far as AppKit can tell, so the
+// pinned-window probes skip it; a replaced window is lifted again.
+typedef int32_t (*NeruSLSMainConnectionIDFn)(void);
+typedef uint64_t (*NeruSLSSpaceCreateFn)(int32_t, int32_t, CFDictionaryRef);
+typedef int32_t (*NeruSLSSpaceSetAbsoluteLevelFn)(int32_t, uint64_t, int32_t);
+typedef int32_t (*NeruSLSShowSpacesFn)(int32_t, CFArrayRef);
+typedef int32_t (*NeruSLSSpaceAddWindowsAndRemoveFromSpacesFn)(int32_t, uint64_t, CFArrayRef, int32_t);
+
+static const int32_t kNeruOverlaySpaceLevel = 400;
+
+static BOOL NeruLiftWindowAboveSystemAlerts(NSWindow *window) {
+	static dispatch_once_t once;
+	static int32_t connection;
+	static uint64_t space;
+	static NeruSLSSpaceAddWindowsAndRemoveFromSpacesFn moveToSpace;
+	dispatch_once(&once, ^{
+		void *sky = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_NOW);
+		if (!sky)
+			return;
+		NeruSLSMainConnectionIDFn mainConnection = (NeruSLSMainConnectionIDFn)dlsym(sky, "SLSMainConnectionID");
+		NeruSLSSpaceCreateFn createSpace = (NeruSLSSpaceCreateFn)dlsym(sky, "SLSSpaceCreate");
+		NeruSLSSpaceSetAbsoluteLevelFn setLevel = (NeruSLSSpaceSetAbsoluteLevelFn)dlsym(sky, "SLSSpaceSetAbsoluteLevel");
+		NeruSLSShowSpacesFn showSpaces = (NeruSLSShowSpacesFn)dlsym(sky, "SLSShowSpaces");
+		NeruSLSSpaceAddWindowsAndRemoveFromSpacesFn move =
+		    (NeruSLSSpaceAddWindowsAndRemoveFromSpacesFn)dlsym(sky, "SLSSpaceAddWindowsAndRemoveFromSpaces");
+		if (!mainConnection || !createSpace || !setLevel || !showSpaces || !move)
+			return;
+		connection = mainConnection();
+		uint64_t created = createSpace(connection, 1, NULL);
+		if (!created)
+			return;
+		setLevel(connection, created, kNeruOverlaySpaceLevel);
+		showSpaces(connection, (__bridge CFArrayRef) @[ @(created) ]);
+		space = created;
+		moveToSpace = move;
+	});
+	if (!space || !moveToSpace || window.windowNumber <= 0)
+		return NO;
+	return moveToSpace(connection, space, (__bridge CFArrayRef) @[ @(window.windowNumber) ], 7) == 0;
+}
 
 #pragma mark - Overlay Window Controller Implementation
 
@@ -2293,6 +2342,7 @@ static BOOL NeruWindowIsOnscreenPerWindowServer(NSInteger windowNumber);
 			[self applyOverlayCollectionBehavior];
 			[self.window setIsVisible:YES];
 			[self.window orderFrontRegardless];
+			self.lifted = NeruLiftWindowAboveSystemAlerts(self.window);
 			[self.window display];
 			[self.overlayView setNeedsDisplay:YES];
 			// Just reordered, so hold off probing for one interval. Then
@@ -2313,6 +2363,7 @@ static BOOL NeruWindowIsOnscreenPerWindowServer(NSInteger windowNumber);
 // Space at once. The overlay view and its layers move across unchanged.
 - (void)replaceWindow {
 	NSPanel *old = self.window;
+	self.lifted = NO;
 	self.window = [self makePanelWithFrame:old.frame];
 	[self.window setLevel:old.level];
 	[self.window setSharingType:self.sharingType];
@@ -2324,7 +2375,7 @@ static BOOL NeruWindowIsOnscreenPerWindowServer(NSInteger windowNumber);
 // A healthy CanJoinAllSpaces window is already on the new Space; repair only
 // a window AppKit or the WindowServer reports dropped.
 - (void)reassertOverlayOnActiveSpace {
-	if (!self.shouldBeVisible || ![self hasDrawableFrame] || self.windowServerReattachScheduled)
+	if (!self.shouldBeVisible || ![self hasDrawableFrame] || self.windowServerReattachScheduled || self.lifted)
 		return;
 
 	if (self.window.isVisible && self.window.isOnActiveSpace) {
@@ -2356,7 +2407,7 @@ static BOOL NeruWindowIsOnscreenPerWindowServer(NSInteger windowNumber);
 	uint64_t generation = ++self.freshOrderGeneration;
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kNeruFreshOrderVerifyDelayNs), dispatch_get_main_queue(), ^{
 		if (generation != self.freshOrderGeneration || !self.shouldBeVisible || ![self hasDrawableFrame] ||
-		    self.windowServerReattachScheduled || !self.window.isVisible)
+		    self.windowServerReattachScheduled || !self.window.isVisible || self.lifted)
 			return;
 
 		// AppKit's cache can claim the active Space while the server disagrees,
@@ -2539,13 +2590,17 @@ static void NeruOrderOverlayWindowIfDrawable(OverlayWindowController *controller
 	[controller applyOverlayCollectionBehavior];
 	[controller.window setIsVisible:YES];
 	[controller.window orderFrontRegardless];
+	if (!controller.lifted)
+		controller.lifted = NeruLiftWindowAboveSystemAlerts(controller.window);
 
 	// The server can silently pin the window to one Space while AppKit's
 	// cache still looks healthy, making the calls above no-ops — probe server
 	// truth and repair with the full reattach cycle. A just-ordered window is
 	// not committed server-side yet, so it gets one interval before probing.
 	CFTimeInterval now = CACurrentMediaTime();
-	if (freshlyOrdered) {
+	if (controller.lifted) {
+		// horse: off the active Space by design, nothing to probe.
+	} else if (freshlyOrdered) {
 		controller.lastOnscreenVerifyTime = now;
 		[controller verifyOnscreenAfterFreshOrder];
 	} else if (
@@ -2644,6 +2699,7 @@ void NeruHideOverlayWindow(OverlayWindow window) {
 		controller.shouldBeVisible = NO;
 		controller.freshOrderGeneration++;
 		controller.onscreenProbeFailureStreak = 0;
+		controller.lifted = NO;
 		[controller.window orderOut:nil];
 		// Shrink to 1x1 to release the large backing store (saves ~47MB per
 		// Retina-resolution full-screen window). The next resize/show call
@@ -2656,6 +2712,7 @@ void NeruHideOverlayWindow(OverlayWindow window) {
 				controller.shouldBeVisible = NO;
 				controller.freshOrderGeneration++;
 				controller.onscreenProbeFailureStreak = 0;
+				controller.lifted = NO;
 				[controller.window orderOut:nil];
 				[controller.window setFrame:NSMakeRect(0, 0, 1, 1) display:NO];
 				[controller.overlayView setFrame:NSMakeRect(0, 0, 1, 1)];
