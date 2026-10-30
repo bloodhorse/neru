@@ -249,6 +249,46 @@ func (a *Adapter) addNotificationCenterElements(
 	return elements
 }
 
+// systemPromptBundleIDs are the agents that draw macOS permission and system
+// dialogs: the accessibility prompt, TCC and generic alerts, and Gatekeeper.
+var systemPromptBundleIDs = []string{
+	"com.apple.accessibility.universalAccessAuthWarn",
+	"com.apple.UserNotificationCenter",
+	"com.apple.coreservices.uiagent",
+}
+
+// addSystemPromptElements adds the buttons of any system dialog that is up.
+func (a *Adapter) addSystemPromptElements(
+	ctx context.Context,
+	elements []*element.Element,
+) []*element.Element {
+	roles := a.client.ClickableRoles()
+
+	for _, bundleID := range systemPromptBundleIDs {
+		nodes, nodesErr := a.client.ClickableElementsFromBundleID(ctx, bundleID, roles, 0)
+		if nodesErr != nil {
+			a.logger.Debug("Failed to get system prompt elements",
+				zap.String("bundle_id", bundleID), zap.Error(nodesErr))
+
+			continue
+		}
+
+		for _, node := range nodes {
+			element, elementErr := a.convertToDomainElement(node)
+
+			node.Release()
+
+			if elementErr != nil {
+				continue
+			}
+
+			elements = append(elements, element)
+		}
+	}
+
+	return elements
+}
+
 // addStageManagerElements adds stage manager center clickable elements.
 func (a *Adapter) addStageManagerElements(
 	ctx context.Context,

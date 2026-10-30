@@ -307,6 +307,13 @@ func (a *Adapter) supplementarySources(
 			collect: func() []*element.Element { return a.addNotificationCenterElements(ctx, nil) },
 		},
 		{
+			// horse: permission and system dialogs belong to background agents,
+			// never the frontmost app, so hints came up blank over them.
+			name:    "system_prompts",
+			enabled: true,
+			collect: func() []*element.Element { return a.addSystemPromptElements(ctx, nil) },
+		},
+		{
 			name:    "stage_manager",
 			enabled: filter.IncludeStageManager,
 			collect: func() []*element.Element { return a.addStageManagerElements(ctx, nil) },
