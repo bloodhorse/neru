@@ -1,5 +1,7 @@
 # AGENTS.md — Neru Agent Guide
 
+> **Fork:** this is bekh's `horse` branch. Read `HORSE.md` first: what the fork changes, how his setup is wired, the gotchas.
+
 This file is the shared source of truth for any AI agent working on this repo (Claude Code, Codex, Copilot, Cursor, etc.). `CLAUDE.md` is a symlink to this file — edit here, never the symlink. Area-specific contracts live in nested `AGENTS.md` files — read the nearest one (and its parents) before editing there: `internal/app/modes/`, `internal/config/`, `internal/adapter/overlay/`, `internal/adapter/platform/` and its `darwin/` and `linux/` subdirectories. Personal overrides go in gitignored `AGENTS.local.md` / `CLAUDE.local.md`.
 
 Neru is a keyboard-driven, mouse-free navigation tool (hints / grid / recursive grid / scroll modes) written in Go, with native bridges per platform (Objective-C on macOS, X11/Wayland/evdev on Linux, Win32 on Windows). macOS is the primary platform; Linux and Windows are partially supported.
