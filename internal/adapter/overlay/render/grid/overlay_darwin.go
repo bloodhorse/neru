@@ -429,7 +429,7 @@ func (o *Overlay) DrawGrid(grid *domainGrid.Grid, currentInput string, style Sty
 
 // UpdateMatches updates matched state without redrawing all cells.
 func (o *Overlay) UpdateMatches(prefix string) {
-	cPrefix := C.CString(prefix)
+	cPrefix := C.CString(strings.ToLower(prefix))
 	defer C.free(unsafe.Pointer(cPrefix))
 	C.NeruUpdateGridMatchPrefix(o.window, cPrefix)
 }
@@ -888,7 +888,8 @@ func (o *Overlay) getOrCacheLabel(label string) *C.char {
 		return cStr
 	}
 
-	cStr := C.CString(label)
+	// horse: labels are drawn lowercase; the prefix is lowered to match.
+	cStr := C.CString(strings.ToLower(label))
 	o.cachedLabels[label] = cStr
 
 	return cStr

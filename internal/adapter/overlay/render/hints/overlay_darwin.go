@@ -657,7 +657,7 @@ func (o *Overlay) hintsAreStructurallyEqual(hintsA, hintsB []*Hint) bool {
 
 // updateMatchesIncremental updates match states incrementally when input changes.
 func (o *Overlay) updateMatchesIncremental(newInput string) {
-	cPrefix := C.CString(newInput)
+	cPrefix := C.CString(strings.ToLower(newInput))
 	defer C.free(unsafe.Pointer(cPrefix))
 
 	C.NeruUpdateHintMatchPrefix(o.window, cPrefix)
