@@ -41,7 +41,12 @@ The config is `~/.config/neru/config.toml`, not in any repo; `neru config reload
   grid, `ctrl-F18` vision hints. All of them carry `--toggle`, so pressing again closes the mode.
   The desk-wide list is `~/tower/functional/lily58-zmk/docs/chords.txt`; the neru line is a hand
   claim in `docs/chords.hand`.
-- **Grid:** `max_label_length = 2`, font 14. bekh likes the dense two-letter grid, Scoot-style; the
+- **Label sizes:** hints 13, grid 17 (`font_size` is an int).
+- **Hint clicks put the cursor back.** `F18`, `shift-F18` and `ctrl-F18` are chains: `save_cursor_pos`,
+  the hints, `wait_for_mode_exit --bail`, `restore_cursor_pos`, so the pointer never parks on the
+  target as a hand. Escape or a toggle-off bails before the restore. The grid is left alone: it's
+  for putting the mouse somewhere.
+- **Grid:** `max_label_length = 2`. bekh likes the dense two-letter grid, Scoot-style; the
   recursive grid was tried and dropped as slower.
 - **In grid and hints:** Enter is the `click_and_exit` macro; arrows nudge 5 px in every mode.
 - **The glow:** hooks `on_mode_enter`/`on_mode_exit` call `shit glow on|off`, which lights a purple
@@ -50,11 +55,11 @@ The config is `~/.config/neru/config.toml`, not in any repo; `neru config reload
 
 ## Gotchas
 
-- **Vision without Screen Recording kills neru.** Neru has no Screen Recording grant yet; a vision
-  pass asks TCC and the process dies quietly, a go death with no crash report (find it with
+- **Vision without Screen Recording kills neru.** Neru has the grant now (added with
+  `perm neru screen`, which presses the list's + itself, since neru never lived long enough to
+  get a row by asking). If it's ever lost: a vision pass asks TCC and the process dies quietly, a go death with no crash report (find it with
   `log show --predicate 'process == "neru"'`). It dies with a mode up, so the exit hook never fires
-  and the glow sticks: `shit glow off`. Grant Neru in System Settings, Privacy, Screen Recording
-  before relying on `ctrl-F18`.
+  and the glow sticks: `shit glow off`. `perm neru screen`, then restart neru.
 - **`--toggle` refuses a `--strategy` list.** A key can't both toggle and cycle strategies.
 - **Fake clicks do land on permission prompts.** Grid plus Enter (a synthetic click) dismissed the
   accessibility prompt; the problem there was never the click, only the missing labels. An AX press
